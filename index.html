@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<!--
+  Panel de administración de Marco (generar código de activación + activar/
+  suspender sucursal desde el teléfono, sin laptop). Ver
+  supabase/functions/panel-api/index.ts para el backend.
+
+  Por qué es un archivo estático en Supabase Storage y NO una Edge Function:
+  se intentó servir este mismo HTML desde una función (`supabase/functions/panel`,
+  retirada) y Supabase fuerza Content-Type: text/plain + un CSP `sandbox` en
+  cualquier respuesta HTML de una función — bloquea el <script> por completo.
+  Un bucket público de Storage sí sirve el content-type real del archivo, sin
+  ese filtro. Confirmado con curl el 24/08/2026.
+
+  Cómo volver a publicar un cambio (no hay build ni deploy automático):
+    curl -X PUT "$SUPABASE_URL/storage/v1/object/panel/index.html" \
+      -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY" \
+      -H "Content-Type: text/html" \
+      --data-binary @web/panel/index.html
+  (agregar `-X POST .../object/panel/index.html?upsert=true` si el PUT falla
+  por content-type en algún entorno — ver nota de despliegue).
+-->
+<html lang="es">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+<title>Panel · POS Tienditas</title>
+<style>
+  :root { color-scheme: light; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 20px 16px 48px; background: #F7F7F5; color: #111315;
+    font-family: -apple-system, Roboto, system-ui, sans-serif; -webkit-tap-highlight-color: transparent;
+  }
+  h1 { font-size: 20px; font-weight: 700; margin: 0 0 4px; }
+  p.sub { color: #6B7280; font-size: 13px; margin: 0 0 20px; }
+  .card {
+    background: #FFFFFF; border: 1px solid #E5E7EB; border-radius: 16px;
+    padding: 16px; margin-bottom: 16px;
+  }
+  .card h2 { font-size: 15px; font-weight: 600; margin: 0 0 12px; }
+  input[type=text], input[type=password] {
+    width: 100%; padding: 12px 14px; font-size: 16px; border: 1px solid #E5E7EB;
+    border-radius: 10px; margin-bottom: 10px; background: #F7F7F5; color: #111315;
+  }
+  button {
+    width: 100%; padding: 14px; font-size: 15px; font-weight: 600; border: none;
+    border-radius: 10px; background: #178754; color: #FFFFFF; cursor: pointer;
+  }
+  button:active { opacity: 0.85; }
+  button.secundario { background: transparent; color: #6B7280; font-weight: 500; }
+  .codigo-generado {
+    text-align: center; font-size: 30px; font-weight: 700; letter-spacing: 2px;
+    padding: 18px; background: #F7F7F5; border-radius: 10px; margin: 12px 0; color: #178754;
+  }
+  .fila-sucursal {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 10px 0; border-bottom: 1px solid #E5E7EB;
+  }
+  .fila-sucursal:last-child { border-bottom: none; }
+  .fila-sucursal .nombre { font-size: 15px; font-weight: 500; }
+  .badge {
+    font-size: 12px; font-weight: 600; padding: 4px 10px; border-radius: 999px; cursor: pointer; border: none;
+  }
+  .badge.activo { background: #178754; color: #fff; }
+  .badge.suspendido { background: #DC2626; color: #fff; }
+  .fila-codigo { padding: 8px 0; border-bottom: 1px solid #E5E7EB; font-size: 13px; }
+  .fila-codigo:last-child { border-bottom: none; }
+  .fila-codigo .codigo { font-weight: 700; font-size: 14px; }
+  .fila-codigo .usado { color: #6B7280; }
+  .fila-codigo .pendiente { color: #178754; }
+  .error { color: #DC2626; font-size: 13px; margin: -4px 0 12px; }
+  .vacio { color: #6B7280; font-size: 13px; padding: 8px 0; }
+</style>
+</head>
+<body>
+
+<div id="pantalla-login">
+  <h1>Panel POS Tienditas</h1>
+  <p class="sub">Escribe la contraseña de administrador (una sola vez, se guarda en este teléfono).</p>
+  <div class="card">
+    <input type="password" id="input-secreto" placeholder="Contraseña" autocomplete="off" />
+    <div class="error" id="error-login" style="display:none"></div>
+    <button onclick="entrar()">Entrar</button>
+  </div>
+</div>
+
+<div id="pantalla-panel" style="display:none">
+  <h1>Panel POS Tienditas</h1>
+  <p class="sub">Códigos de activación y estado de sucursales.</p>
+
+  <div class="card">
+    <h2>Generar código para una tienda nueva</h2>
+    <input type="text" id="input-nota" placeholder="Nombre de la tienda (opcional)" />
+    <button onclick="generarCodigo()">Generar código nuevo</button>
+    <div id="resultado-codigo"></div>
+  </div>
+
+  <div class="card">
+    <h2>Sucursales</h2>
+    <div id="lista-sucursales"><div class="vacio">Cargando…</div></div>
+  </div>
+
+  <div class="card">
+    <h2>Últimos códigos generados</h2>
+    <div id="lista-codigos"><div class="vacio">Cargando…</div></div>
+  </div>
+
+  <button class="secundario" onclick="cerrarSesion()">Olvidar contraseña en este teléfono</button>
+</div>
+
+<script>
+  var CLAVE_SECRETO = 'pt_admin_secreto';
+  // Absoluta y fija a propósito: esta página vive en Storage (otro dominio
+  // que el de las Functions), así que no se puede derivar de location.href.
+  var URL_API = 'https://ijntaernyflvqvvhvhkj.supabase.co/functions/v1/panel-api';
+
+  function secretoGuardado() { return localStorage.getItem(CLAVE_SECRETO); }
+
+  async function llamar(accion, extra) {
+    var body = Object.assign({ accion: accion, secreto: secretoGuardado() }, extra || {});
+    var resp = await fetch(URL_API, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+    var data = await resp.json().catch(function () { return {}; });
+    if (!resp.ok) throw new Error(data.error || 'error_desconocido');
+    return data;
+  }
+
+  async function entrar() {
+    var secreto = document.getElementById('input-secreto').value.trim();
+    var err = document.getElementById('error-login');
+    err.style.display = 'none';
+    if (!secreto) return;
+    localStorage.setItem(CLAVE_SECRETO, secreto);
+    try {
+      await cargarTodo();
+      document.getElementById('pantalla-login').style.display = 'none';
+      document.getElementById('pantalla-panel').style.display = 'block';
+    } catch (e) {
+      localStorage.removeItem(CLAVE_SECRETO);
+      err.textContent = 'Contraseña incorrecta.';
+      err.style.display = 'block';
+    }
+  }
+
+  function cerrarSesion() {
+    localStorage.removeItem(CLAVE_SECRETO);
+    location.reload();
+  }
+
+  async function generarCodigo() {
+    var nota = document.getElementById('input-nota').value.trim();
+    var cont = document.getElementById('resultado-codigo');
+    cont.innerHTML = '<div class="vacio">Generando…</div>';
+    try {
+      var data = await llamar('generar_codigo', { nota: nota });
+      cont.innerHTML = '<div class="codigo-generado">' + data.codigo + '</div>';
+      document.getElementById('input-nota').value = '';
+      cargarTodo();
+    } catch (e) {
+      cont.innerHTML = '<div class="error">No se pudo generar. Intenta de nuevo.</div>';
+    }
+  }
+
+  async function cambiarEstado(sucursalId, estadoActual) {
+    var nuevo = estadoActual === 'activo' ? 'suspendido' : 'activo';
+    if (!confirm(nuevo === 'suspendido' ? '¿Suspender esta sucursal?' : '¿Reactivar esta sucursal?')) return;
+    try {
+      await llamar('set_estado', { sucursalId: sucursalId, estado: nuevo });
+      cargarTodo();
+    } catch (e) {
+      alert('No se pudo cambiar el estado. Intenta de nuevo.');
+    }
+  }
+
+  function pintarSucursales(sucursales) {
+    var cont = document.getElementById('lista-sucursales');
+    if (!sucursales.length) { cont.innerHTML = '<div class="vacio">Todavía no hay sucursales activadas.</div>'; return; }
+    cont.innerHTML = sucursales.map(function (s) {
+      return '<div class="fila-sucursal"><span class="nombre">' + escapar(s.nombre) + '</span>' +
+        '<button class="badge ' + s.estado_licencia + '" onclick="cambiarEstado(\'' + s.id + '\', \'' + s.estado_licencia + '\')">' +
+        (s.estado_licencia === 'activo' ? 'Activo' : 'Suspendido') + '</button></div>';
+    }).join('');
+  }
+
+  function pintarCodigos(codigos) {
+    var cont = document.getElementById('lista-codigos');
+    if (!codigos.length) { cont.innerHTML = '<div class="vacio">Todavía no hay códigos generados.</div>'; return; }
+    cont.innerHTML = codigos.map(function (c) {
+      var estado = c.usado ? '<span class="usado">usado</span>' : '<span class="pendiente">pendiente</span>';
+      var nota = c.nota ? ' — ' + escapar(c.nota) : '';
+      return '<div class="fila-codigo"><span class="codigo">' + c.codigo + '</span> ' + estado + nota + '</div>';
+    }).join('');
+  }
+
+  function escapar(s) {
+    var d = document.createElement('div');
+    d.textContent = s;
+    return d.innerHTML;
+  }
+
+  async function cargarTodo() {
+    var data = await llamar('listar');
+    pintarSucursales(data.sucursales || []);
+    pintarCodigos(data.codigos || []);
+  }
+
+  (function inicio() {
+    if (secretoGuardado()) {
+      cargarTodo().then(function () {
+        document.getElementById('pantalla-login').style.display = 'none';
+        document.getElementById('pantalla-panel').style.display = 'block';
+      }).catch(function () {
+        localStorage.removeItem(CLAVE_SECRETO);
+      });
+    }
+  })();
+</script>
+</body>
+</html>
