@@ -69,6 +69,13 @@
   }
   .badge.activo { background: #178754; color: #fff; }
   .badge.suspendido { background: #DC2626; color: #fff; }
+  .fila-sucursal .info-pago { display: flex; align-items: center; justify-content: space-between; margin-top: 8px; gap: 8px; }
+  .fila-sucursal .estado-pago { font-size: 12px; font-weight: 600; }
+  .fila-sucursal .estado-pago.vencido { color: #DC2626; }
+  .fila-sucursal .estado-pago.pronto { color: #B45309; }
+  .fila-sucursal .estado-pago.ok { color: #6B7280; font-weight: 500; }
+  .fila-sucursal .actividad { font-size: 11px; color: #9CA3AF; margin-top: 2px; }
+  .boton-pago { width: auto; padding: 6px 14px; font-size: 12px; border-radius: 999px; flex-shrink: 0; }
   .fila-codigo { padding: 8px 0; border-bottom: 1px solid #E5E7EB; font-size: 13px; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
   .fila-codigo:last-child { border-bottom: none; }
   .fila-codigo .info { min-width: 0; }
@@ -224,6 +231,52 @@
     }
   }
 
+  // Días de calendario entre hoy y una fecha "YYYY-MM-DD" (positivo = en el
+  // futuro, negativo = ya pasó) — se comparan medianoches UTC para no fallar
+  // por horario local ni horario de verano.
+  function diasHasta(fechaIso) {
+    var hoyUtc = Date.UTC.apply(null, (function () { var h = new Date(); return [h.getUTCFullYear(), h.getUTCMonth(), h.getUTCDate()]; })());
+    var partes = fechaIso.split('-').map(Number);
+    var fechaUtc = Date.UTC(partes[0], partes[1] - 1, partes[2]);
+    return Math.round((fechaUtc - hoyUtc) / 86400000);
+  }
+
+  function estadoPago(s) {
+    if (!s.proximo_pago) return { clase: 'pronto', texto: 'Sin fecha de pago registrada' };
+    var dias = diasHasta(s.proximo_pago);
+    if (dias < 0) return { clase: 'vencido', texto: 'Venció hace ' + (-dias) + ' día' + (-dias === 1 ? '' : 's') };
+    if (dias === 0) return { clase: 'vencido', texto: 'Vence hoy' };
+    if (dias <= 3) return { clase: 'pronto', texto: 'Vence en ' + dias + ' día' + (dias === 1 ? '' : 's') };
+    return { clase: 'ok', texto: 'Vence en ' + dias + ' días' };
+  }
+
+  function textoActividad(s) {
+    if (!s.ultima_actividad) return 'Sin ventas registradas todavía';
+    var ms = Math.max(new Date() - new Date(s.ultima_actividad), 0);
+    var diasPasados = Math.floor(ms / 86400000);
+    if (diasPasados === 0) return 'Última venta: hoy';
+    if (diasPasados === 1) return 'Última venta: ayer';
+    return 'Última venta: hace ' + diasPasados + ' días';
+  }
+
+  // Vencidos primero (los más atrasados arriba), luego los que vencen
+  // pronto, luego el resto, y al final las que nunca han pagado — así lo
+  // urgente siempre queda arriba sin tener que buscarlo.
+  function ordenPago(s) {
+    if (!s.proximo_pago) return 999999;
+    return diasHasta(s.proximo_pago);
+  }
+
+  async function confirmarPago(sucursalId, nombre) {
+    if (!confirm('¿Confirmar que ' + nombre + ' ya pagó? Se reactiva si estaba suspendida y se corre su fecha de pago 30 días.')) return;
+    try {
+      await llamar('confirmar_pago', { sucursalId: sucursalId });
+      cargarTodo();
+    } catch (e) {
+      alert('No se pudo confirmar el pago. Intenta de nuevo.');
+    }
+  }
+
   function pintarSucursales(sucursales) {
     if (sucursales) ultimaListaSucursales = sucursales;
     var cont = document.getElementById('lista-sucursales');
@@ -233,11 +286,13 @@
       return (s.nombre || '').toLowerCase().indexOf(filtro) !== -1 ||
         (s.contacto_nombre || '').toLowerCase().indexOf(filtro) !== -1;
     });
+    lista.sort(function (a, b) { return ordenPago(a) - ordenPago(b); });
 
     if (!ultimaListaSucursales.length) { cont.innerHTML = '<div class="vacio">Todavía no hay sucursales activadas.</div>'; return; }
     if (!lista.length) { cont.innerHTML = '<div class="vacio">Ninguna coincide con la búsqueda.</div>'; return; }
 
     cont.innerHTML = lista.map(function (s) {
+      var pago = estadoPago(s);
       return '<div class="fila-sucursal">' +
         '<div class="encabezado"><span class="nombre">' + escapar(s.nombre) + '</span>' +
         '<button class="badge ' + s.estado_licencia + '" onclick="cambiarEstado(\'' + s.id + '\', \'' + s.estado_licencia + '\')">' +
@@ -245,6 +300,11 @@
         '<div class="contacto">' +
         '<input type="text" class="chico" id="contacto-nombre-' + s.id + '" placeholder="Nombre del dueño" value="' + escapar(s.contacto_nombre || '') + '" onblur="guardarContacto(\'' + s.id + '\')" />' +
         '<input type="tel" class="chico" id="contacto-tel-' + s.id + '" placeholder="Teléfono" value="' + escapar(s.contacto_telefono || '') + '" onblur="guardarContacto(\'' + s.id + '\')" />' +
+        '</div>' +
+        '<div class="info-pago">' +
+        '<span><span class="estado-pago ' + pago.clase + '">' + pago.texto + '</span>' +
+        '<div class="actividad">' + textoActividad(s) + '</div></span>' +
+        '<button class="boton-pago" onclick="confirmarPago(\'' + s.id + '\', \'' + escapar(s.nombre).replace(/'/g, "\\'") + '\')">Confirmar pago</button>' +
         '</div></div>';
     }).join('');
   }
