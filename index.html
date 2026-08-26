@@ -2,23 +2,25 @@
 <!--
   Panel de administración de Marco (generar código de activación + activar/
   suspender sucursal desde el teléfono, sin laptop). Ver
-  supabase/functions/panel-api/index.ts para el backend.
+  pos-tienditas/supabase/functions/panel-api/index.ts para el backend.
 
-  Por qué es un archivo estático en Supabase Storage y NO una Edge Function:
-  se intentó servir este mismo HTML desde una función (`supabase/functions/panel`,
-  retirada) y Supabase fuerza Content-Type: text/plain + un CSP `sandbox` en
-  cualquier respuesta HTML de una función — bloquea el <script> por completo.
-  Un bucket público de Storage sí sirve el content-type real del archivo, sin
-  ese filtro. Confirmado con curl el 24/08/2026.
+  Historial de hosting de este archivo (por qué NO vive en Supabase):
+  1. Edge Function propia (`supabase/functions/panel`, retirada) — Supabase
+     fuerza Content-Type: text/plain + un CSP `sandbox` en cualquier
+     respuesta HTML de una función, bloquea el <script> por completo.
+  2. Bucket de Supabase Storage — mismo problema de CSP, confirmado con
+     curl 24/08/2026.
+  3. GitHub Pages — funcionaba, pero *.github.io no cargaba con datos
+     móviles en la red de Marco (WiFi sí, datos no) — confirmado 26/08/2026,
+     Supabase y el resto de internet sí respondían con datos.
+  4. Railway (actual) — mismo patrón que pylonsystems.net y el bot de
+     FacturaYa, ya probado que funciona en cualquier red. Servido por
+     server.js (sin dependencias) en este mismo repo.
 
-  Cómo volver a publicar un cambio (no hay build ni deploy automático):
-    curl -X PUT "$SUPABASE_URL/storage/v1/object/panel/index.html" \
-      -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY" \
-      -H "Content-Type: text/html" \
-      --data-binary @web/panel/index.html
-  (agregar `-X POST .../object/panel/index.html?upsert=true` si el PUT falla
-  por content-type en algún entorno — ver nota de despliegue).
+  Cómo volver a publicar un cambio:
+    railway up --detach   (desde esta carpeta, con el CLI ya logueado)
 -->
+
 <html lang="es">
 <head>
 <meta charset="utf-8" />
