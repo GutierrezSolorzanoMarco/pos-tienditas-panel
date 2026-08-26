@@ -1,8 +1,8 @@
 <!DOCTYPE html>
 <!--
   Panel de administración de Marco (generar código de activación + activar/
-  suspender sucursal desde el teléfono, sin laptop). Ver
-  pos-tienditas/supabase/functions/panel-api/index.ts para el backend.
+  suspender sucursal + contacto del dueño desde el teléfono, sin laptop).
+  Ver pos-tienditas/supabase/functions/panel-api/index.ts para el backend.
 
   Historial de hosting de este archivo (por qué NO vive en Supabase):
   1. Edge Function propia (`supabase/functions/panel`, retirada) — Supabase
@@ -40,10 +40,11 @@
     padding: 16px; margin-bottom: 16px;
   }
   .card h2 { font-size: 15px; font-weight: 600; margin: 0 0 12px; }
-  input[type=text], input[type=password] {
+  input[type=text], input[type=password], input[type=tel] {
     width: 100%; padding: 12px 14px; font-size: 16px; border: 1px solid #E5E7EB;
     border-radius: 10px; margin-bottom: 10px; background: #F7F7F5; color: #111315;
   }
+  input.chico { padding: 8px 10px; font-size: 13px; margin-bottom: 0; }
   button {
     width: 100%; padding: 14px; font-size: 15px; font-weight: 600; border: none;
     border-radius: 10px; background: #178754; color: #FFFFFF; cursor: pointer;
@@ -53,23 +54,30 @@
   .codigo-generado {
     text-align: center; font-size: 30px; font-weight: 700; letter-spacing: 2px;
     padding: 18px; background: #F7F7F5; border-radius: 10px; margin: 12px 0; color: #178754;
+    cursor: pointer;
   }
-  .fila-sucursal {
-    display: flex; align-items: center; justify-content: space-between;
-    padding: 10px 0; border-bottom: 1px solid #E5E7EB;
-  }
+  .codigo-generado .toca { font-size: 12px; font-weight: 500; color: #6B7280; display: block; margin-top: 4px; letter-spacing: normal; }
+  .fila-sucursal { padding: 10px 0; border-bottom: 1px solid #E5E7EB; }
   .fila-sucursal:last-child { border-bottom: none; }
+  .fila-sucursal .encabezado { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
   .fila-sucursal .nombre { font-size: 15px; font-weight: 500; }
+  .fila-sucursal .contacto { display: flex; gap: 8px; }
+  .fila-sucursal .contacto input { flex: 1; }
   .badge {
     font-size: 12px; font-weight: 600; padding: 4px 10px; border-radius: 999px; cursor: pointer; border: none;
+    flex-shrink: 0; margin-left: 8px;
   }
   .badge.activo { background: #178754; color: #fff; }
   .badge.suspendido { background: #DC2626; color: #fff; }
-  .fila-codigo { padding: 8px 0; border-bottom: 1px solid #E5E7EB; font-size: 13px; }
+  .fila-codigo { padding: 8px 0; border-bottom: 1px solid #E5E7EB; font-size: 13px; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
   .fila-codigo:last-child { border-bottom: none; }
-  .fila-codigo .codigo { font-weight: 700; font-size: 14px; }
+  .fila-codigo .info { min-width: 0; }
+  .fila-codigo .codigo { font-weight: 700; font-size: 14px; cursor: pointer; }
   .fila-codigo .usado { color: #6B7280; }
   .fila-codigo .pendiente { color: #178754; }
+  .fila-codigo .acciones { flex-shrink: 0; display: flex; gap: 10px; }
+  .link-accion { font-size: 12px; font-weight: 600; color: #178754; background: none; border: none; padding: 0; width: auto; cursor: pointer; }
+  .link-accion.borrar { color: #DC2626; }
   .error { color: #DC2626; font-size: 13px; margin: -4px 0 12px; }
   .vacio { color: #6B7280; font-size: 13px; padding: 8px 0; }
 </style>
@@ -99,6 +107,7 @@
 
   <div class="card">
     <h2>Sucursales</h2>
+    <input type="text" id="buscar-sucursal" placeholder="Buscar por nombre o contacto…" oninput="pintarSucursales()" />
     <div id="lista-sucursales"><div class="vacio">Cargando…</div></div>
   </div>
 
@@ -112,9 +121,14 @@
 
 <script>
   var CLAVE_SECRETO = 'pt_admin_secreto';
-  // Absoluta y fija a propósito: esta página vive en Storage (otro dominio
+  // Absoluta y fija a propósito: esta página vive en Railway (otro dominio
   // que el de las Functions), así que no se puede derivar de location.href.
   var URL_API = 'https://ijntaernyflvqvvhvhkj.supabase.co/functions/v1/panel-api';
+
+  // Cache local de lo último que llegó del servidor — pintarSucursales() la
+  // vuelve a pintar filtrada cada vez que se escribe en el buscador, sin
+  // pedirle nada de nuevo a la API.
+  var ultimaListaSucursales = [];
 
   function secretoGuardado() { return localStorage.getItem(CLAVE_SECRETO); }
 
@@ -148,13 +162,34 @@
     location.reload();
   }
 
+  // Copiar con un toque — con fallback por si el navegador no da
+  // navigator.clipboard (ej. sitios sin https, aunque aquí siempre es https).
+  function copiar(texto, elemento) {
+    function marcarCopiado() {
+      if (!elemento) return;
+      var original = elemento.getAttribute('data-original') || elemento.textContent;
+      elemento.setAttribute('data-original', original);
+      elemento.textContent = '¡Copiado!';
+      setTimeout(function () { elemento.textContent = elemento.getAttribute('data-original'); }, 900);
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(texto).then(marcarCopiado).catch(function () {});
+    } else {
+      var t = document.createElement('textarea');
+      t.value = texto; document.body.appendChild(t); t.select();
+      try { document.execCommand('copy'); marcarCopiado(); } catch (e) {}
+      document.body.removeChild(t);
+    }
+  }
+
   async function generarCodigo() {
     var nota = document.getElementById('input-nota').value.trim();
     var cont = document.getElementById('resultado-codigo');
     cont.innerHTML = '<div class="vacio">Generando…</div>';
     try {
       var data = await llamar('generar_codigo', { nota: nota });
-      cont.innerHTML = '<div class="codigo-generado">' + data.codigo + '</div>';
+      cont.innerHTML = '<div class="codigo-generado" id="codigo-nuevo">' + data.codigo + '<span class="toca">Toca para copiar</span></div>';
+      document.getElementById('codigo-nuevo').onclick = function () { copiar(data.codigo, this); };
       document.getElementById('input-nota').value = '';
       cargarTodo();
     } catch (e) {
@@ -173,14 +208,55 @@
     }
   }
 
+  // Se guarda solo al salir del campo (onblur) — nada de guardar en cada
+  // tecla. Manda ambos campos juntos (el otro se lee del DOM) para no
+  // pisar uno con un update parcial viejo si el usuario edita los dos
+  // rápido.
+  async function guardarContacto(sucursalId) {
+    var nombre = document.getElementById('contacto-nombre-' + sucursalId).value;
+    var telefono = document.getElementById('contacto-tel-' + sucursalId).value;
+    try {
+      await llamar('actualizar_contacto', { sucursalId: sucursalId, contactoNombre: nombre, contactoTelefono: telefono });
+      var s = ultimaListaSucursales.find(function (x) { return x.id === sucursalId; });
+      if (s) { s.contacto_nombre = nombre; s.contacto_telefono = telefono; }
+    } catch (e) {
+      alert('No se pudo guardar el contacto. Intenta de nuevo.');
+    }
+  }
+
   function pintarSucursales(sucursales) {
+    if (sucursales) ultimaListaSucursales = sucursales;
     var cont = document.getElementById('lista-sucursales');
-    if (!sucursales.length) { cont.innerHTML = '<div class="vacio">Todavía no hay sucursales activadas.</div>'; return; }
-    cont.innerHTML = sucursales.map(function (s) {
-      return '<div class="fila-sucursal"><span class="nombre">' + escapar(s.nombre) + '</span>' +
+    var filtro = (document.getElementById('buscar-sucursal').value || '').trim().toLowerCase();
+    var lista = ultimaListaSucursales.filter(function (s) {
+      if (!filtro) return true;
+      return (s.nombre || '').toLowerCase().indexOf(filtro) !== -1 ||
+        (s.contacto_nombre || '').toLowerCase().indexOf(filtro) !== -1;
+    });
+
+    if (!ultimaListaSucursales.length) { cont.innerHTML = '<div class="vacio">Todavía no hay sucursales activadas.</div>'; return; }
+    if (!lista.length) { cont.innerHTML = '<div class="vacio">Ninguna coincide con la búsqueda.</div>'; return; }
+
+    cont.innerHTML = lista.map(function (s) {
+      return '<div class="fila-sucursal">' +
+        '<div class="encabezado"><span class="nombre">' + escapar(s.nombre) + '</span>' +
         '<button class="badge ' + s.estado_licencia + '" onclick="cambiarEstado(\'' + s.id + '\', \'' + s.estado_licencia + '\')">' +
-        (s.estado_licencia === 'activo' ? 'Activo' : 'Suspendido') + '</button></div>';
+        (s.estado_licencia === 'activo' ? 'Activo' : 'Suspendido') + '</button></div>' +
+        '<div class="contacto">' +
+        '<input type="text" class="chico" id="contacto-nombre-' + s.id + '" placeholder="Nombre del dueño" value="' + escapar(s.contacto_nombre || '') + '" onblur="guardarContacto(\'' + s.id + '\')" />' +
+        '<input type="tel" class="chico" id="contacto-tel-' + s.id + '" placeholder="Teléfono" value="' + escapar(s.contacto_telefono || '') + '" onblur="guardarContacto(\'' + s.id + '\')" />' +
+        '</div></div>';
     }).join('');
+  }
+
+  async function cancelarCodigo(codigoId) {
+    if (!confirm('¿Cancelar este código? Ya no se va a poder usar.')) return;
+    try {
+      await llamar('cancelar_codigo', { codigoId: codigoId });
+      cargarTodo();
+    } catch (e) {
+      alert('No se pudo cancelar — puede que ya se haya usado.');
+    }
   }
 
   function pintarCodigos(codigos) {
@@ -189,7 +265,10 @@
     cont.innerHTML = codigos.map(function (c) {
       var estado = c.usado ? '<span class="usado">usado</span>' : '<span class="pendiente">pendiente</span>';
       var nota = c.nota ? ' — ' + escapar(c.nota) : '';
-      return '<div class="fila-codigo"><span class="codigo">' + c.codigo + '</span> ' + estado + nota + '</div>';
+      var acciones = '<button class="link-accion" onclick="copiar(\'' + c.codigo + '\', this)">Copiar</button>';
+      if (!c.usado) acciones += '<button class="link-accion borrar" onclick="cancelarCodigo(\'' + c.id + '\')">Cancelar</button>';
+      return '<div class="fila-codigo"><span class="info"><span class="codigo" onclick="copiar(\'' + c.codigo + '\', this)">' + c.codigo + '</span> ' + estado + nota + '</span>' +
+        '<span class="acciones">' + acciones + '</span></div>';
     }).join('');
   }
 
