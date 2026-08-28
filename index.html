@@ -75,6 +75,9 @@
   .fila-sucursal .estado-pago.pronto { color: #B45309; }
   .fila-sucursal .estado-pago.ok { color: #6B7280; font-weight: 500; }
   .fila-sucursal .actividad { font-size: 11px; color: #9CA3AF; margin-top: 2px; }
+  .fila-sucursal .codigo-negocio { font-size: 12px; color: #6B7280; margin-bottom: 8px; }
+  .fila-sucursal .codigo-negocio strong { letter-spacing: 1px; color: #111827; }
+  .fila-sucursal .copiar-codigo { color: #178754; font-weight: 600; cursor: pointer; margin-left: 4px; }
   .boton-pago { width: auto; padding: 6px 14px; font-size: 12px; border-radius: 999px; flex-shrink: 0; }
   .fila-codigo { padding: 8px 0; border-bottom: 1px solid #E5E7EB; font-size: 13px; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
   .fila-codigo:last-child { border-bottom: none; }
@@ -305,6 +308,10 @@
         '<div class="encabezado"><span class="nombre">' + escapar(s.nombre) + '</span>' +
         '<button class="badge ' + s.estado_licencia + '" onclick="cambiarEstado(\'' + s.id + '\', \'' + s.estado_licencia + '\')">' +
         (s.estado_licencia === 'activo' ? 'Activo' : 'Suspendido') + '</button></div>' +
+        (s.codigo_activacion
+          ? '<div class="codigo-negocio">Código: <strong>' + escapar(s.codigo_activacion) + '</strong> ' +
+            '<span class="copiar-codigo" onclick="copiar(\'' + escapar(s.codigo_activacion) + '\', this)">Copiar</span></div>'
+          : '') +
         '<div class="contacto">' +
         '<input type="text" class="chico" id="contacto-nombre-' + s.id + '" placeholder="Nombre del dueño" value="' + escapar(s.contacto_nombre || '') + '" onblur="guardarContacto(\'' + s.id + '\')" />' +
         '<input type="tel" class="chico" id="contacto-tel-' + s.id + '" placeholder="Teléfono" value="' + escapar(s.contacto_telefono || '') + '" onblur="guardarContacto(\'' + s.id + '\')" />' +
